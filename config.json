@@ -1,0 +1,213 @@
+{
+  "pasta_destino": "C:\\Users\\Inri Corretora 18\\Desktop\\IMPORTAÇÕES GOALFY",
+  "url_icone": "https://logospng.org/wp-content/uploads/microsoft-outlook.png",
+  "webhook_url": "https://flow.goalfy.com.br/automations/v1/8d964268-4f90-41eb-abe4-f5030317858c/hooks/catch/",
+  "matrizes": [
+    {
+      "id": "MATRIZ_1",
+      "caminho": "C:/Users/Inri Corretora 18/Dropbox/GOALFY/ICX/ICX - MOTO/MATRIZ - ICX LEADS MOTO - 2026.xlsx",
+      "exibicao": "MOTO ICX",
+      "ativado": false
+    },
+    {
+      "id": "MATRIZ_2",
+      "caminho": "C:\\Users\\Inri Corretora 18\\Dropbox\\GOALFY\\INRI\\INRI - RESID\\LEADS RESIDENCIAL - MATRIZ - 2026.xlsx",
+      "exibicao": "RESID INRI",
+      "ativado": true
+    },
+    {
+      "id": "MATRIZ_3",
+      "caminho": "C:\\Users\\Inri Corretora 18\\Dropbox\\GOALFY\\ICX\\ICX - RESID\\LEADS RESIDENCIAL ICX - MATRIZ.xlsx",
+      "exibicao": "RESID ICX",
+      "ativado": true
+    },
+    {
+      "id": "MATRIZ_4",
+      "caminho": "C:\\Users\\Inri Corretora 18\\Dropbox\\GOALFY\\INRI\\INRI - AUTO\\PLANILHA AUTO INRI 2026 BASE.xlsx",
+      "exibicao": "AUTO INRI",
+      "ativado": true
+    },
+    {
+      "id": "MATRIZ_5",
+      "caminho": "C:\\Users\\Inri Corretora 18\\Dropbox\\GOALFY\\INRI\\INRI - BIKE\\PLANILHA BIKE 2026.xlsx",
+      "exibicao": "BIKE",
+      "ativado": true
+    },
+    {
+      "id": "MATRIZ_6",
+      "caminho": "C:\\Users\\Inri Corretora 18\\Dropbox\\GOALFY\\INRI\\INRI - CELULAR\\MATRIZ - PLANILHA CELULAR INRI 2026.xlsx",
+      "exibicao": "CELULAR INRI",
+      "ativado": false
+    },
+    {
+      "id": "MATRIZ_7",
+      "caminho": "C:\\Users\\Inri Corretora 18\\Dropbox\\GOALFY\\INRI\\INRI - MOTO\\MATRIZ - LEADS MOTO INRI 2026.xlsx",
+      "exibicao": "MOTO INRI",
+      "ativado": true
+    },
+    {
+      "id": "MATRIZ_8",
+      "caminho": "C:\\Users\\Inri Corretora 18\\Dropbox\\GOALFY\\INRI\\INRI - ODONTO\\MATRIZ - ODONTO 2026.xlsx",
+      "exibicao": "ODONTO",
+      "ativado": true
+    },
+    {
+      "id": "MATRIZ_9",
+      "caminho": "C:\\Users\\Inri Corretora 18\\Dropbox\\GOALFY\\INRI\\INRI - PET\\PLANILHA PET 2026.xlsx",
+      "exibicao": "PET",
+      "ativado": true
+    },
+    {
+      "id": "MATRIZ_10",
+      "caminho": "C:\\Users\\Inri Corretora 18\\Dropbox\\GOALFY\\INRI\\INRI - PORTATEIS\\PLANILHA PORTÁTEIS 2026.xlsx",
+      "exibicao": "PORTATEIS",
+      "ativado": true
+    },
+    {
+      "id": "MATRIZ_11",
+      "caminho": "C:\\Users\\Inri Corretora 18\\Dropbox\\GOALFY\\INRI\\INRI - SAUDE\\MATRIZ SAÚDE - 2026.xlsx",
+      "exibicao": "SAUDE",
+      "ativado": true
+    },
+    {
+      "id": "MATRIZ_12",
+      "caminho": "C:\\Users\\Inri Corretora 18\\Dropbox\\GOALFY\\INRI\\INRI - VIAGEM\\MATRIZ LEADS VIAGEM INRI - JULHO - 2026.xlsx",
+      "exibicao": "VIAGEM INRI",
+      "ativado": true
+    },
+    {
+      "id": "MATRIZ_13",
+      "caminho": "C:\\Users\\Inri Corretora 18\\Dropbox\\GOALFY\\INRI\\INRI - VIDA\\PLANILHA VIDA 2026.xlsx",
+      "exibicao": "VIDA",
+      "ativado": true
+    },
+    {
+      "id": "MATRIZ_14",
+      "caminho": "C:\\Users\\Inri Corretora 18\\Dropbox\\GOALFY\\INRI\\INRI - VINCULO\\MATRIZ VINCULO 2026.xlsx",
+      "exibicao": "VINCULO",
+      "ativado": true
+    },
+    {
+      "id": "MATRIZ_15",
+      "caminho": "C:\\Users\\Inri Corretora 18\\Dropbox\\GOALFY\\ICX\\AUTO ICX BONIF\\MATRIZ LEADS AUTO BONIF 2026.xlsx",
+      "exibicao": "AUTO BONIF",
+      "ativado": true
+    },
+    {
+      "id": "MATRIZ_16",
+      "caminho": "C:\\Users\\Inri Corretora 18\\Dropbox\\GOALFY\\ICX\\ICX - AUTO\\PLANILHA AUTO ICX 2026.xlsx",
+      "exibicao": "AUTO ICX",
+      "ativado": true
+    },
+    {
+      "id": "MATRIZ_17",
+      "caminho": "C:\\Users\\Inri Corretora 18\\Dropbox\\GOALFY\\ICX\\ICX - CELULAR\\MATRIZ - PLANILHA CELULAR ICX 2026.xlsx",
+      "exibicao": "CELULAR ICX",
+      "ativado": true
+    },
+    {
+      "id": "MATRIZ_18",
+      "exibicao": "VIAGEM ICX",
+      "caminho": "C:/Users/Inri Corretora 18/Dropbox/GOALFY/ICX/ICX - VIAGEM/MATRIZ LEADS VIAGEM ICX - 2026.xlsx",
+      "ativado": true
+    }
+  ],
+  "vendedores": [
+    {
+      "nome": "BARBARA",
+      "email": "barbara@inricorretora.com.br"
+    },
+    {
+      "nome": "BRENO",
+      "email": "breno@inricorretora.com.br"
+    },
+    {
+      "nome": "CAMILA SILVA",
+      "email": "camila@inricorretora.com.br"
+    },
+    {
+      "nome": "CAMILA FERNANDES ",
+      "email": "camila.fernandes@inricorretora.com.br"
+    },
+    {
+      "nome": "CASSIA",
+      "email": "cassia@inricorretora.com.br"
+    },
+    {
+      "nome": "CLAUDIA",
+      "email": "claudia@inricorretora.com.br"
+    },
+    {
+      "nome": "EDELYN",
+      "email": "edelyn@inricorretora.com.br"
+    },
+    {
+      "nome": "FERNANDA",
+      "email": "fernanda@inricorretora.com.br"
+    },
+    {
+      "nome": "GABRIEL",
+      "email": "gabriel@inricorretora.com.br"
+    },
+    {
+      "nome": "HINGRID",
+      "email": "hingrid@inricorretora.com.br"
+    },
+    {
+      "nome": "JAQUELINE",
+      "email": "jaqueline@inricorretora.com.br"
+    },
+    {
+      "nome": "JULIANA",
+      "email": "juliana@inricorretora.com.br"
+    },
+    {
+      "nome": "KAUASANTOS",
+      "email": "kauasantos@inricorretora.com.br"
+    },
+    {
+      "nome": "MARCELO",
+      "email": "marcelo@inricorretora.com.br"
+    },
+    {
+      "nome": "MARIA FERNANDA",
+      "email": "mariafernanda@inricorretora.com.br"
+    },
+    {
+      "nome": "MATHEUS",
+      "email": "matheus@inricorrera.com.br"
+    },
+    {
+      "nome": "MILENE",
+      "email": "milene@inricorretora.com.br"
+    },
+    {
+      "nome": "N SOUZA",
+      "email": "natalia.souza@inricorretora.com.br"
+    },
+    {
+      "nome": "NATALIA",
+      "email": "natalia@inricorretora.com.br"
+    },
+    {
+      "nome": "PEDRO PEREIRA",
+      "email": "pedroalves@inricorretora.com.br"
+    },
+    {
+      "nome": "PRISCILLA",
+      "email": "priscilla@inricorretora.com.br"
+    },
+    {
+      "nome": "YASMIN",
+      "email": "yasmin@inricorretora.com.br"
+    },
+    {
+      "nome": "STEFFANNY",
+      "email": "steffanny@inricorretora.com.br"
+    },
+    {
+      "nome": "LEONARDO",
+      "email": "leonardo@inricorretora.com.br"
+    }
+  ]
+}
