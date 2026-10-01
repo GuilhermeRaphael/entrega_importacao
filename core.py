@@ -230,7 +230,7 @@ def formatar_cnpj(valor: Any) -> str:
 
 
 def consolidar_remessa(
-    config: dict, fila: list[ItemFila]
+    config: dict, fila: list[ItemFila], progress_callback=None
 ) -> tuple[list[dict], bool, list[str]]:
     """Processa a fila de remessa: abre cada matriz, marca as linhas puxadas
     (responsavel/modelo/datas) e monta os registros consolidados.
@@ -242,119 +242,162 @@ def consolidar_remessa(
 
     tem_auto_bonif = any(item.produto.strip().upper() == "AUTO BONIF" for item in fila)
 
-    for item in fila:
-        caminho_arq = obter_caminho_matriz(config, item.produto)
-        if not caminho_arq or not os.path.isfile(caminho_arq):
-            avisos.append(
-                f"Matriz não encontrada para o produto '{item.produto}'. Item ignorado."
-            )
-            continue
+    from collections import Counter, deque
+    caminhos = [obter_caminho_matriz(config, item.produto) for item in fila]
+    caminhos = [os.path.normcase(os.path.abspath(caminho)) if caminho else "" for caminho in caminhos]
+    restantes = Counter(caminhos)
+    abertos, candidatos = {}, {}
 
-        wb = openpyxl.load_workbook(caminho_arq)  # mantém fórmulas eventuais intactas
-        ws = wb.worksheets[0]
-
-        modelo_nome = item.modelo.strip().upper()
-        qtd_coletada = 0
-
-        for row_cells in ws.iter_rows(min_row=2):
-            if qtd_coletada >= item.quantidade:
+    def proximas_linhas(por_modelo, modelo, quantidade):
+        livres = por_modelo.get("", deque())
+        especificas = por_modelo.get(modelo, deque()) if modelo else deque()
+        for _ in range(quantidade):
+            if not livres and not especificas:
                 break
-
-            def val(col):
-                return row_cells[col - 1].value
-
-            nome = str(val(COL_MATRIZ_NOME) or "").strip()
-            tel = str(val(COL_MATRIZ_TELEFONE) or "").strip()
-            email = str(val(COL_MATRIZ_EMAIL) or "").strip()
-            if not (nome or tel or email):
-                continue
-
-            resp_existente = str(val(COL_MATRIZ_RESPONSAVEL) or "").strip()
-            dia_recolhe_existente = str(val(COL_MATRIZ_DIA_RECOLHE) or "").strip()
-            dt_entrega_existente = str(val(COL_MATRIZ_DATA_ENTREGA) or "").strip()
-            if not (
-                resp_existente == ""
-                and dia_recolhe_existente == ""
-                and dt_entrega_existente == ""
-            ):
-                continue
-
-            modelo_matriz_existente = str(val(COL_MATRIZ_MODELO) or "").strip().upper()
-            if not (
-                modelo_matriz_existente == "" or modelo_matriz_existente == modelo_nome
-            ):
-                continue
-
-            # --- marca a linha como puxada ---
-            data_entrega_dt = datetime.now().date()
-            # Weekday(vbMonday-based): segunda=1..domingo=7. Python weekday(): segunda=0..domingo=6
-            dias_add = (
-                5 if data_entrega_dt.weekday() >= 2 else 3
-            )  # >=3 no VBA (1-based) == >=2 (0-based)
-            dia_recolhe_dt = data_entrega_dt + timedelta(days=dias_add)
-
-            row_cells[COL_MATRIZ_RESPONSAVEL - 1].value = item.vendedor
-            row_cells[COL_MATRIZ_MODELO - 1].value = modelo_nome
-            row_cells[COL_MATRIZ_DATA_ENTREGA - 1].value = data_entrega_dt.strftime(
-                "%Y-%m-%d"
-            )
-            row_cells[COL_MATRIZ_DIA_RECOLHE - 1].value = dia_recolhe_dt.strftime(
-                "%Y-%m-%d"
-            )
-
-            # --- monta o registro consolidado ---
-            doc_raw = str(val(COL_MATRIZ_DOC) or "").strip()
-            doc_limpo = (
-                doc_raw.replace(".", "")
-                .replace("-", "")
-                .replace("/", "")
-                .replace(" ", "")
-            )
-
-            if len(doc_limpo) > 11:
-                colar_cpf, colar_cnpj = "", doc_raw
+            if livres and (not especificas or livres[0][0].row < especificas[0][0].row):
+                yield livres.popleft()
             else:
-                colar_cpf, colar_cnpj = doc_raw, ""
+                yield especificas.popleft()
 
-            chegada_lead = val(COL_MATRIZ_CHEGADA_LEAD)
-            chegada_lead_fmt = (
-                formatar_data_estrita(chegada_lead) if chegada_lead else ""
-            )
+    try:
+        for item, caminho_arq in zip(fila, caminhos):
+            if not caminho_arq or not os.path.isfile(caminho_arq):
+                avisos.append(
+                    f"Matriz não encontrada para o produto '{item.produto}'. Item ignorado."
+                )
+                continue
 
-            registro = {
-                "n": val(COL_MATRIZ_N),
-                "nome": nome,
-                "telefone": tel,
-                "colarCpf": colar_cpf,
-                "colarCnpj": colar_cnpj,
-                "email": email,
-                "chegadaDoLead": chegada_lead_fmt,
-                "diaRecolhe": dia_recolhe_dt.strftime("%Y-%m-%d"),
-                "responsavel": item.vendedor,
-                "produto": val(COL_MATRIZ_PRODUTO) or item.produto,
-                "empresa": val(COL_MATRIZ_EMPRESA) or "",
-                "modelo": modelo_nome,
-                "cpf": formatar_cpf(colar_cpf),
-                "cnpj": formatar_cnpj(colar_cnpj),
-            }
-            if tem_auto_bonif:
-                registro[HEADER_BONIF] = (
-                    "BONIFICACAO"
-                    if item.produto.strip().upper() == "AUTO BONIF"
-                    else ""
+            if caminho_arq not in abertos:
+                if progress_callback:
+                    progress_callback(f"Abrindo matriz: {item.produto}")
+                from matriz_rapida import MatrizLeve
+                wb = MatrizLeve(caminho_arq, _linha_elegivel)
+                abertos[caminho_arq] = wb
+                por_modelo = {}
+                # Read only rows that contain contact data; formatted blank rows are irrelevant.
+                ws = wb.worksheets[0]
+                linhas = sorted({row for (row, col), cell in ws._cells.items()
+                                 if row >= 2 and col in (2, 3, 5) and cell.value is not None})
+                for numero in linhas:
+                    cells = tuple(ws.cell(numero, col) for col in range(1, COL_MATRIZ_DATA_ENTREGA + 1))
+                    if _linha_elegivel(tuple(cell.value for cell in cells)):
+                        modelo = str(cells[COL_MATRIZ_MODELO - 1].value or "").strip().upper()
+                        por_modelo.setdefault(modelo, deque()).append(cells)
+                candidatos[caminho_arq] = por_modelo
+            wb = abertos[caminho_arq]
+
+            modelo_nome = item.modelo.strip().upper()
+            qtd_coletada = 0
+
+            for row_cells in proximas_linhas(candidatos[caminho_arq], modelo_nome, item.quantidade):
+                if qtd_coletada >= item.quantidade:
+                    break
+
+                def val(col):
+                    return row_cells[col - 1].value
+
+                nome = str(val(COL_MATRIZ_NOME) or "").strip()
+                tel = str(val(COL_MATRIZ_TELEFONE) or "").strip()
+                email = str(val(COL_MATRIZ_EMAIL) or "").strip()
+                if not (nome or tel or email):
+                    continue
+
+                resp_existente = str(val(COL_MATRIZ_RESPONSAVEL) or "").strip()
+                dia_recolhe_existente = str(val(COL_MATRIZ_DIA_RECOLHE) or "").strip()
+                dt_entrega_existente = str(val(COL_MATRIZ_DATA_ENTREGA) or "").strip()
+                if not (
+                    resp_existente == ""
+                    and dia_recolhe_existente == ""
+                    and dt_entrega_existente == ""
+                ):
+                    continue
+
+                modelo_matriz_existente = str(val(COL_MATRIZ_MODELO) or "").strip().upper()
+                if not (
+                    modelo_matriz_existente == "" or modelo_matriz_existente == modelo_nome
+                ):
+                    continue
+
+                # --- marca a linha como puxada ---
+                data_entrega_dt = datetime.now().date()
+                # Weekday(vbMonday-based): segunda=1..domingo=7. Python weekday(): segunda=0..domingo=6
+                dias_add = (
+                    5 if data_entrega_dt.weekday() >= 2 else 3
+                )  # >=3 no VBA (1-based) == >=2 (0-based)
+                dia_recolhe_dt = data_entrega_dt + timedelta(days=dias_add)
+
+                row_cells[COL_MATRIZ_RESPONSAVEL - 1].value = item.vendedor
+                row_cells[COL_MATRIZ_MODELO - 1].value = modelo_nome
+                row_cells[COL_MATRIZ_DATA_ENTREGA - 1].value = data_entrega_dt.strftime(
+                    "%Y-%m-%d"
+                )
+                row_cells[COL_MATRIZ_DIA_RECOLHE - 1].value = dia_recolhe_dt.strftime(
+                    "%Y-%m-%d"
                 )
 
-            registros.append(registro)
-            qtd_coletada += 1
+                # --- monta o registro consolidado ---
+                doc_raw = str(val(COL_MATRIZ_DOC) or "").strip()
+                doc_limpo = (
+                    doc_raw.replace(".", "")
+                    .replace("-", "")
+                    .replace("/", "")
+                    .replace(" ", "")
+                )
 
-        wb.save(caminho_arq)
-        wb.close()
+                if len(doc_limpo) > 11:
+                    colar_cpf, colar_cnpj = "", doc_raw
+                else:
+                    colar_cpf, colar_cnpj = doc_raw, ""
 
-        if qtd_coletada < item.quantidade:
-            avisos.append(
-                f"Produto '{item.produto}' / modelo '{item.modelo}': solicitados {item.quantidade}, "
-                f"encontrados apenas {qtd_coletada} leads elegíveis."
-            )
+                chegada_lead = val(COL_MATRIZ_CHEGADA_LEAD)
+                chegada_lead_fmt = (
+                    formatar_data_estrita(chegada_lead) if chegada_lead else ""
+                )
+
+                registro = {
+                    "matrizOrigem": item.produto,
+                    "n": val(COL_MATRIZ_N),
+                    "nome": nome,
+                    "telefone": tel,
+                    "colarCpf": colar_cpf,
+                    "colarCnpj": colar_cnpj,
+                    "email": email,
+                    "chegadaDoLead": chegada_lead_fmt,
+                    "diaRecolhe": dia_recolhe_dt.strftime("%Y-%m-%d"),
+                    "responsavel": item.vendedor,
+                    "produto": val(COL_MATRIZ_PRODUTO) or item.produto,
+                    "empresa": val(COL_MATRIZ_EMPRESA) or "",
+                    "modelo": modelo_nome,
+                    "cpf": formatar_cpf(colar_cpf),
+                    "cnpj": formatar_cnpj(colar_cnpj),
+                }
+                if tem_auto_bonif:
+                    registro[HEADER_BONIF] = (
+                        "BONIFICACAO"
+                        if item.produto.strip().upper() == "AUTO BONIF"
+                        else ""
+                    )
+
+                registros.append(registro)
+                qtd_coletada += 1
+
+            restantes[caminho_arq] -= 1
+            if restantes[caminho_arq] == 0:
+                if progress_callback:
+                    progress_callback(f"Salvando matriz: {item.produto}")
+                salvar_workbook_rapido(wb, caminho_arq)
+                wb.close()
+                del abertos[caminho_arq]
+
+            if qtd_coletada < item.quantidade:
+                avisos.append(
+                    f"Produto '{item.produto}' / modelo '{item.modelo}': solicitados {item.quantidade}, "
+                    f"encontrados apenas {qtd_coletada} leads elegíveis."
+                )
+
+    finally:
+        for workbook in abertos.values():
+            workbook.close()
 
     return registros, tem_auto_bonif, avisos
 
@@ -364,50 +407,119 @@ def consolidar_remessa(
 # ---------------------------------------------------------------------------
 
 
-def salvar_planilha_importacao(
-    config: dict, registros: list[dict], tem_auto_bonif: bool
-) -> str:
-    from openpyxl.styles import Alignment, Font, PatternFill
+def salvar_workbook_rapido(wb, caminho):
+    if hasattr(wb, "salvar"):
+        return wb.salvar(caminho)
+    from zipfile import ZipFile, ZIP_DEFLATED
+    from openpyxl.writer.excel import ExcelWriter
+    with ZipFile(caminho, "w", ZIP_DEFLATED, allowZip64=True, compresslevel=1) as arquivo:
+        ExcelWriter(wb, arquivo).save()
 
+
+def formatar_tabela_relatorio(ws, primeira_linha, ultima_linha, primeira_coluna, ultima_coluna, nome):
+    from openpyxl.styles import Border, Side, Alignment, Font, PatternFill
+    from openpyxl.worksheet.table import Table, TableStyleInfo
+    from openpyxl.utils import get_column_letter
+    lado = Side(style="thin", color="000000")
+    borda = Border(left=lado, right=lado, top=lado, bottom=lado)
+    for row in ws.iter_rows(min_row=primeira_linha, max_row=ultima_linha,
+                            min_col=primeira_coluna, max_col=ultima_coluna):
+        for cell in row:
+            cell.border = borda
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.font = Font(name="Calibri", size=9, bold=cell.row == primeira_linha,
+                             color="FFFFFF" if cell.row == primeira_linha else "000000")
+            cell.fill = PatternFill("solid", fgColor="002060" if cell.row == primeira_linha else "FFFFFF")
+    tabela = Table(displayName=nome, ref=f"{get_column_letter(primeira_coluna)}{primeira_linha}:{get_column_letter(ultima_coluna)}{ultima_linha}")
+    tabela.tableStyleInfo = TableStyleInfo(showFirstColumn=False, showLastColumn=False, showRowStripes=False, showColumnStripes=False)
+    ws.add_table(tabela)
+    ws.freeze_panes = f"{get_column_letter(primeira_coluna)}{primeira_linha + 1}"
+    ws.sheet_view.showGridLines = False
+    ws.sheet_view.showRowColHeaders = False
+
+
+def validar_pasta_destino(config):
+    """Valida a pasta exata escolhida e a permissão de escrita antes da distribuição."""
+    import tempfile
+    caminho = str(config.get("pasta_destino", "")).strip()
+    if not caminho:
+        raise ValueError("Selecione uma pasta de importação em Configurações > Geral.")
+    caminho = os.path.expandvars(os.path.expanduser(caminho))
+    if not os.path.isabs(caminho):
+        raise ValueError("A pasta de importação deve ter um caminho completo.")
+    try:
+        os.makedirs(caminho, exist_ok=True)
+        with tempfile.TemporaryFile(dir=caminho) as teste:
+            teste.write(b"ok")
+            teste.flush()
+    except OSError as exc:
+        raise OSError(f"Não foi possível gravar na pasta '{caminho}'. Escolha uma pasta com acesso de escrita. Detalhe: {exc}") from exc
+    return caminho
+
+
+def salvar_planilha_importacao(config, registros, tem_auto_bonif):
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.cell import WriteOnlyCell
+    from openpyxl.utils import get_column_letter
     headers = HEADERS_BASE + ([HEADER_BONIF] if tem_auto_bonif else [])
-
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "IMPORTAÇÃO"
-    ws.append(headers)
-
-    header_fill = PatternFill(
-        start_color="002060", end_color="002060", fill_type="solid"
-    )
-    header_font = Font(color="FFFFFF", bold=True)
-    for cell in ws[1]:
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.alignment = Alignment(horizontal="center", vertical="center")
-
-    for reg in registros:
-        ws.append([reg.get(h, "") for h in headers])
-
-    for col_cells in ws.columns:
-        largura = (
-            max((len(str(c.value)) if c.value is not None else 0) for c in col_cells)
-            + 2
-        )
-        ws.column_dimensions[col_cells[0].column_letter].width = min(largura, 40)
-
-    pasta_destino = config.get("pasta_destino", "").rstrip("\\/")
+    if any(r.get("matrizOrigem") for r in registros):
+        headers.append("matrizOrigem")
+    pasta_destino = validar_pasta_destino(config)
     agora = datetime.now()
-    nome_mes = agora.strftime("%B").upper()
-    pasta_mes = os.path.join(
-        pasta_destino, f"{agora.month} - {nome_mes} - {agora.strftime('%y')}"
-    )
-    pasta_dia = os.path.join(pasta_mes, agora.strftime("%d-%m-%Y"))
+    pasta_dia = os.path.join(pasta_destino, f"{agora.month} - {agora.strftime('%B').upper()} - {agora.strftime('%y')}", agora.strftime("%d-%m-%Y"))
     os.makedirs(pasta_dia, exist_ok=True)
+    caminho = os.path.join(pasta_dia, f"IMPORTAÇÃO GERAL GOALFY - {agora.strftime('%Y-%m-%d_%Hh%M%S_%f')}.xlsx")
+    wb = openpyxl.Workbook(write_only=True)
+    ws = wb.create_sheet("IMPORTAÇÃO")
+    # Column dimensions precede sheet data in streaming mode.
+    larguras = [len(h) for h in headers]
+    for r in registros:
+        for i, h in enumerate(headers):
+            larguras[i] = max(larguras[i], len(str(r.get(h, "") or "")))
+    for i, largura in enumerate(larguras, 1):
+        ws.column_dimensions[get_column_letter(i)].width = min(largura + 2, 40)
+    cells = []
+    for h in headers:
+        cell = WriteOnlyCell(ws, value=h)
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.fill = PatternFill("solid", fgColor="002060")
+        cell.alignment = Alignment(horizontal="center")
+        cells.append(cell)
+    ws.append(cells)
+    for r in registros:
+        ws.append([r.get(h, "") for h in headers])
+    salvar_workbook_rapido(wb, caminho)
+    wb.close()
+    return caminho
 
-    nome_arquivo = f"IMPORTAÇÃO GERAL GOALFY - {agora.strftime('%Y-%m-%d_%Hh%M')}.xlsx"
-    caminho_saida = os.path.join(pasta_dia, nome_arquivo)
-    wb.save(caminho_saida)
-    return caminho_saida
+
+def ler_planilha_importacao(caminho):
+    """Lê somente arquivos de importação; não distribui nem altera matrizes."""
+    wb = openpyxl.load_workbook(caminho, read_only=True, data_only=True)
+    try:
+        aba = next((n for n in wb.sheetnames if n.upper() in ("IMPORTAÇÃO", "IMPORTACAO")), None)
+        if not aba:
+            raise ValueError("Selecione uma planilha com a aba IMPORTAÇÃO criada pelo app.")
+        linhas = wb[aba].iter_rows(values_only=True)
+        headers = [str(v or "").strip() for v in next(linhas, ())]
+        obrigatorios = set(HEADERS_BASE)
+        if len(headers) != len(set(headers)) or not obrigatorios <= set(headers):
+            raise ValueError("A planilha não possui os cabeçalhos válidos da importação Goalfy.")
+        registros = []
+        for numero, valores in enumerate(linhas, 2):
+            if not any(v is not None and str(v).strip() for v in valores):
+                continue
+            r = {h: (valores[i] if i < len(valores) and valores[i] is not None else "") for i, h in enumerate(headers)}
+            for campo in ("chegadaDoLead", "diaRecolhe"):
+                if isinstance(r.get(campo), datetime):
+                    r[campo] = r[campo].strftime("%Y-%m-%d")
+            r["_linha_origem"] = numero
+            registros.append(r)
+        if not registros:
+            raise ValueError("A planilha de importação está vazia.")
+        return registros
+    finally:
+        wb.close()
 
 
 # ---------------------------------------------------------------------------
@@ -551,7 +663,7 @@ def gerar_planilha_grupo(
 
     ws.merge_cells("B2:M2")
     cel_titulo = ws["B2"]
-    cel_titulo.value = f"{titulo} - {agora.strftime('%d/%m/%Y - %Hh%M')}"
+    cel_titulo.value = f"ENTREGA DE LEADS - {vend} - {titulo} - {agora.strftime('%d/%m/%Y %H:%M')}"
     cel_titulo.font = Font(bold=True, size=14, name="Calibri")
     cel_titulo.alignment = Alignment(horizontal="center", vertical="center")
 
@@ -602,6 +714,14 @@ def gerar_planilha_grupo(
         )
         ws.column_dimensions[col_letter].width = min(largura, 40)
 
+    grosso = Side(style="thick", color="000000")
+    for col in range(2, 14):
+        ws.cell(2, col).border = Border(top=grosso, bottom=grosso,
+                                       left=grosso if col == 2 else Side(),
+                                       right=grosso if col == 13 else Side())
+    ws.row_dimensions[2].height = 28
+    formatar_tabela_relatorio(ws, 3, max(3, linha - 1), 2, 13, "TabelaLeadsVendedor")
+
     ws.page_setup.orientation = "landscape"
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 0
@@ -617,7 +737,8 @@ def gerar_planilha_grupo(
     for ch in '<>:"/\\|?*':
         nome_arquivo = nome_arquivo.replace(ch, "")
     caminho = os.path.join(pasta_temp, nome_arquivo)
-    wb.save(caminho)
+    salvar_workbook_rapido(wb, caminho)
+    wb.close()
     return caminho
 
 

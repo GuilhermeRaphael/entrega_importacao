@@ -14,6 +14,9 @@ from tkinter import filedialog, messagebox, ttk
 import customtkinter as ctk
 
 import core
+import gestores
+import envio_goalfy
+from autocomplete import CampoAutocomplete, chave as chave_campo
 
 ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
@@ -35,10 +38,18 @@ class AppImportador(ctk.CTk):
         self.geometry("1040x720")
         self.minsize(960, 650)
 
-        self.config_data = core.load_config()
+        self.config_data = gestores.migrar_cadastros_gestores(core.load_config())
+        self._gerando = False
+        self._assinaturas_geradas = set()
+        self._assinatura_em_geracao = None
+        self._goalfy_em_execucao = False
+        self._exportacao_pendente = None
         self.fila: list[core.ItemFila] = []
         self.ultimos_registros: list[dict] = []
         self.tem_auto_bonif = False
+        self._ultimo_bloco = None
+        self._modelos_cache = {}
+        self._produto_modelos = None
 
         self.tabview = ctk.CTkTabview(self, width=1020, height=700)
         self.tabview.pack(padx=10, pady=10, fill="both", expand=True)
@@ -68,7 +79,7 @@ class AppImportador(ctk.CTk):
         col1 = ctk.CTkFrame(linha, fg_color="transparent")
         col1.pack(side="left", padx=5, fill="x", expand=True)
         ctk.CTkLabel(col1, text="Produto").pack(anchor="w")
-        self.cbo_produto = ctk.CTkComboBox(
+        self.cbo_produto = CampoAutocomplete(
             col1,
             values=core.listar_produtos_ativos(self.config_data),
             command=self._on_produto_change,
@@ -80,14 +91,14 @@ class AppImportador(ctk.CTk):
         col2 = ctk.CTkFrame(linha, fg_color="transparent")
         col2.pack(side="left", padx=5, fill="x", expand=True)
         ctk.CTkLabel(col2, text="Modelo").pack(anchor="w")
-        self.cbo_modelo = ctk.CTkComboBox(col2, values=[], width=180)
+        self.cbo_modelo = CampoAutocomplete(col2, values=[], width=180)
         self.cbo_modelo.set(PH_MODELO)
         self.cbo_modelo.pack(fill="x")
 
         col3 = ctk.CTkFrame(linha, fg_color="transparent")
         col3.pack(side="left", padx=5, fill="x", expand=True)
         ctk.CTkLabel(col3, text="Vendedor").pack(anchor="w")
-        self.cbo_vendedor = ctk.CTkComboBox(
+        self.cbo_vendedor = CampoAutocomplete(
             col3, values=self._nomes_vendedores(), width=180
         )
         self.cbo_vendedor.set(PH_VENDEDOR)
@@ -116,6 +127,11 @@ class AppImportador(ctk.CTk):
             command=self._remover_item,
         ).pack(side="left", padx=5)
 
+        ctk.CTkButton(
+            linha_botoes, text="VOLTAR PRODUTO / MODELO", fg_color="#555555",
+            command=self._restaurar_ultimo_bloco,
+        ).pack(side="left", padx=5)
+
         # --- tabela da fila ---
         tabela_frame = ctk.CTkFrame(frame)
         tabela_frame.pack(padx=20, pady=10, fill="both", expand=True)
@@ -130,14 +146,20 @@ class AppImportador(ctk.CTk):
         self.tree.pack(fill="both", expand=True, padx=5, pady=5)
 
         # --- botão gerar ---
-        ctk.CTkButton(
+        self.btn_gerar = ctk.CTkButton(
             frame,
             text="GERAR IMPORTAÇÃO",
             fg_color=AZUL,
             height=45,
             font=ctk.CTkFont(size=15, weight="bold"),
             command=self._gerar_importacao_thread,
-        ).pack(padx=20, pady=(5, 5), fill="x")
+        )
+        self.btn_gerar.pack(padx=20, pady=(5, 5), fill="x")
+        controles = ctk.CTkFrame(frame, fg_color="transparent")
+        controles.pack(fill="x", padx=20, pady=3)
+        self.travar_repeticao = ctk.BooleanVar(value=True)
+        ctk.CTkSwitch(controles, text="TRAVAR IMPORTAÇÃO REPETIDA", variable=self.travar_repeticao).pack(side="left", padx=5)
+        ctk.CTkButton(controles, text="NOVA REMESSA", command=self._nova_remessa, width=150).pack(side="right", padx=5)
 
         self.lbl_status_geracao = ctk.CTkLabel(
             frame, text="Monte a fila e clique em Gerar Importação.", text_color="gray"
@@ -189,6 +211,56 @@ class AppImportador(ctk.CTk):
         )
         self.btn_imprimir.grid(row=0, column=2, padx=5, sticky="ew")
 
+        self.btn_enviar_gestores = ctk.CTkButton(
+            botoes_acao, text="ENVIAR E-MAIL P/ GESTORES", fg_color=AZUL_ESCURO,
+            state="disabled", command=self._selecionar_gestores,
+        )
+        self.btn_enviar_gestores.grid(row=1, column=0, columnspan=3, padx=5, pady=(8, 0), sticky="ew")
+        self.btn_reenviar_goalfy = ctk.CTkButton(
+            botoes_acao, text="ENVIAR PLANILHA SALVA AO GOALFY", fg_color=VERDE,
+            command=self._abrir_planilha_goalfy,
+        )
+        self.btn_reenviar_goalfy.grid(row=2, column=0, columnspan=3, padx=5, pady=(8, 0), sticky="ew")
+
+
+    def _selecionar_gestores(self):
+        if not self.ultimos_registros:
+            return
+        try:
+            configuracoes = gestores.obter_configuracoes_gestores(self.config_data)
+            produtos = self.ultimos_registros
+            selecionados = gestores.abrir_interface_selecao_gestores(produtos, configuracoes, parent=self)
+        except Exception as exc:
+            messagebox.showerror("Gestores", f"Não foi possível ler a configuração: {exc}", parent=self)
+            return
+        if not selecionados:
+            return
+        registros = [dict(r) for r in self.ultimos_registros]
+        self._set_botoes_pos_geracao(False)
+        threading.Thread(target=self._executar_envio_gestores,
+                         args=(selecionados, registros), daemon=True).start()
+
+    def _executar_envio_gestores(self, selecionados, registros):
+        import tempfile
+        def progresso(i, total, ok):
+            self.after(0, lambda i=i, total=total: self.lbl_resumo_envio.configure(text=f"Gestores: envio {i} de {total}..."))
+            self.after(0, lambda i=i, total=total: self.progress_bar.set(i / total))
+        try:
+            produtos = {gestores._chave(r["PRODUTO"]) for r in selecionados}
+            registros = [r for r in registros if gestores.produtos_do_lead(r).intersection(produtos)]
+            with tempfile.TemporaryDirectory(prefix="relatorios_gestores_") as pasta:
+                relatorios = gestores.gerar_relatorios_gerais(registros, selecionados, pasta)
+                sucesso, falha, avisos = gestores.enviar_emails_gestores(selecionados, relatorios, progresso)
+            mensagem = f"Enviados: {sucesso}\nFalhas/ignorados: {falha}"
+            if avisos:
+                mensagem += "\n\nDetalhes:\n" + "\n".join(avisos)
+            self.after(0, lambda mensagem=mensagem: messagebox.showinfo("Envio para Gestores", mensagem, parent=self))
+        except Exception as exc:
+            mensagem = str(exc)
+            self.after(0, lambda mensagem=mensagem: messagebox.showerror("Gestores", mensagem, parent=self))
+        finally:
+            self.after(0, lambda: self._set_botoes_pos_geracao(True))
+
     def _nomes_vendedores(self):
         return [v.get("nome", "") for v in self.config_data.get("vendedores", [])]
 
@@ -209,11 +281,21 @@ class AppImportador(ctk.CTk):
             self.cbo_modelo.set(PH_MODELO)
             return
         try:
-            saldo = core.obter_modelos_disponiveis(caminho, self.fila, produto)
+            stat = os.stat(caminho)
+            chave_cache = (caminho, stat.st_size, stat.st_mtime_ns)
+            if chave_cache not in self._modelos_cache:
+                self._modelos_cache[chave_cache] = core.obter_modelos_disponiveis(caminho, None, produto)
+            saldo = dict(self._modelos_cache[chave_cache])
+            for item in self.fila:
+                if item.produto.strip().upper() == produto.strip().upper():
+                    modelo = item.modelo.strip().upper()
+                    saldo[modelo] = saldo.get(modelo, 0) - item.quantidade
+            saldo = {modelo:qtd for modelo,qtd in saldo.items() if qtd > 0}
         except Exception as e:
             messagebox.showerror("Erro", f"Erro ao ler a matriz:\n{e}")
             return
 
+        self._produto_modelos = produto
         if not saldo:
             self.cbo_modelo.configure(values=["(NENHUM MODELO COM ESTOQUE)"])
             self.cbo_modelo.set("(NENHUM MODELO COM ESTOQUE)")
@@ -221,6 +303,19 @@ class AppImportador(ctk.CTk):
             valores = [f"{modelo} - {qtd}" for modelo, qtd in saldo.items()]
             self.cbo_modelo.configure(values=valores)
             self.cbo_modelo.set(PH_MODELO)
+
+    def _restaurar_ultimo_bloco(self):
+        if self._ultimo_bloco is None:
+            messagebox.showinfo("Última seleção", "Adicione um bloco à fila primeiro.", parent=self)
+            return
+        produto, modelo = self._ultimo_bloco
+        self.cbo_produto.set(produto)
+        self._atualizar_modelos(produto)
+        opcao = next((v for v in self.cbo_modelo.cget("values") if v.rsplit(" - ",1)[0] == modelo), None)
+        if opcao:
+            self.cbo_modelo.set(opcao)
+        else:
+            messagebox.showinfo("Modelo", "O modelo anterior não possui saldo disponível para outro bloco.", parent=self)
 
     def _adicionar_item(self):
         produto = self.cbo_produto.get().strip()
@@ -245,13 +340,29 @@ class AppImportador(ctk.CTk):
             messagebox.showwarning("Aviso", "Informe uma quantidade válida!")
             return
 
+        produto_cadastrado = next((v for v in core.listar_produtos_ativos(self.config_data) if chave_campo(v.strip()) == chave_campo(produto)), None)
+        vendedor_cadastrado = next((v for v in self._nomes_vendedores() if chave_campo(v.strip()) == chave_campo(vendedor)), None)
+        if produto_cadastrado is None or vendedor_cadastrado is None:
+            messagebox.showwarning("Seleção", "Escolha um produto e um vendedor cadastrados nas sugestões.", parent=self)
+            return
+        produto, vendedor = produto_cadastrado, vendedor_cadastrado.strip()
+        if self._produto_modelos != produto:
+            self._atualizar_modelos(produto)
+        opcoes_modelo = self.cbo_modelo.cget("values")
+        correspondencia = next((v for v in opcoes_modelo if chave_campo(v) == chave_campo(modelo_raw)
+                                or chave_campo(v.rsplit(" - ",1)[0]) == chave_campo(modelo_raw)), None)
+        if correspondencia is None:
+            messagebox.showwarning("Modelo", "Selecione um modelo disponível nas sugestões.", parent=self)
+            return
+        modelo_raw = correspondencia
         modelo = (
-            modelo_raw.split(" - ")[0].strip() if " - " in modelo_raw else modelo_raw
+            modelo_raw.rsplit(" - ",1)[0].strip() if " - " in modelo_raw else modelo_raw
         )
 
         item = core.ItemFila(
             produto=produto, modelo=modelo, vendedor=vendedor, quantidade=int(qtd_raw)
         )
+        self._ultimo_bloco = (produto, modelo)
         self.fila.append(item)
         self.tree.insert(
             "",
@@ -277,79 +388,130 @@ class AppImportador(ctk.CTk):
     # ------------------------------------------------------------------
     # Geração da importação
     # ------------------------------------------------------------------
-    def _gerar_importacao_thread(self):
-        if not self.fila:
-            messagebox.showwarning(
-                "Aviso", "A fila de entregas está vazia! Adicione pelo menos um item."
-            )
+    def _nova_remessa(self):
+        if self._gerando or self._goalfy_em_execucao:
             return
-        threading.Thread(target=self._gerar_importacao, daemon=True).start()
+        if self._exportacao_pendente is not None:
+            messagebox.showwarning("Salvamento pendente", "Conclua o salvamento da entrega atual antes de iniciar outra remessa.", parent=self)
+            return
+        self.fila.clear()
+        self.tree.delete(*self.tree.get_children())
+        self._assinaturas_geradas.clear()
+        self.ultimos_registros = []
+        self._set_botoes_pos_geracao(False)
+        self.lbl_status_geracao.configure(text="Monte a nova fila de entrega.", text_color="gray")
+        self.lbl_resumo_envio.configure(text="Nenhuma importação gerada nesta remessa.")
+        self.progress_bar.set(0)
 
-    def _gerar_importacao(self):
-        self.lbl_status_geracao.configure(
-            text="Processando matrizes, aguarde...", text_color="gray"
-        )
-        self._set_botoes_pos_geracao(habilitado=False)
+    def _gerar_importacao_thread(self):
+        import copy
+        if self._gerando or getattr(self, "_goalfy_em_execucao", False):
+            return
+        if not self.fila and self._exportacao_pendente is None:
+            messagebox.showwarning("Aviso", "A fila está vazia. Adicione pelo menos um item.", parent=self)
+            return
+        assinatura = tuple((i.produto.strip(), i.modelo.strip(), i.vendedor.strip(), i.quantidade) for i in self.fila)
+        if self._exportacao_pendente is None and self.travar_repeticao.get() and assinatura in self._assinaturas_geradas:
+            messagebox.showwarning("Importação repetida bloqueada",
+                                   "Esta fila já gerou uma importação. Não é possível gerar duas vezes a mesma entrega. Use NOVA REMESSA para iniciar outra entrega.", parent=self)
+            return
+        if self._exportacao_pendente is None:
+            self._assinatura_em_geracao = assinatura
+        nova_config = copy.deepcopy(self.config_data)
+        nova_config["pasta_destino"] = self.entry_pasta_destino.get().strip()
         try:
-            registros, tem_bonif, avisos = core.consolidar_remessa(
-                self.config_data, self.fila
-            )
+            core.validar_pasta_destino(nova_config)
+            core.save_config(nova_config)
+        except Exception as exc:
+            messagebox.showerror("Pasta de importação", str(exc), parent=self)
+            return
+        self.config_data = nova_config
+        self._gerando = True
+        self.btn_gerar.configure(state="disabled")
+        self._set_botoes_pos_geracao(False)
+        self.lbl_status_geracao.configure(text="Processando importação, aguarde...", text_color="gray")
+        threading.Thread(target=self._gerar_importacao,
+                         args=(copy.deepcopy(nova_config), copy.deepcopy(self.fila)), daemon=True).start()
 
-            if not registros:
-                self.lbl_status_geracao.configure(
-                    text="Nenhum lead elegível localizado nas matrizes selecionadas.",
-                    text_color="orange",
-                )
-                messagebox.showwarning(
-                    "Aviso",
-                    "Nenhum lead elegível localizado para os critérios informados!",
-                )
-                return
-
-            caminho_saida = core.salvar_planilha_importacao(
-                self.config_data, registros, tem_bonif
-            )
-
-            self.ultimos_registros = registros
-            self.tem_auto_bonif = tem_bonif
-
-            texto = f"✅ {len(registros)} leads importados. Backup salvo em:\n{caminho_saida}"
-            if avisos:
-                texto += "\n\nAvisos:\n" + "\n".join(avisos)
-            self.lbl_status_geracao.configure(
-                text=f"✅ {len(registros)} leads importados.", text_color=VERDE
-            )
-            self.lbl_resumo_envio.configure(
-                text=f"{len(registros)} leads prontos. Escolha uma ação abaixo."
-            )
-            self._set_botoes_pos_geracao(habilitado=True)
-            self.progress_bar.set(0)
-
-            messagebox.showinfo("Importação Concluída", texto)
+    def _gerar_importacao(self, config, fila):
+        try:
+            if self._exportacao_pendente is None:
+                def progresso(texto):
+                    self.after(0, lambda texto=texto: self.lbl_status_geracao.configure(text=texto))
+                registros, tem_bonif, avisos = core.consolidar_remessa(config, fila, progress_callback=progresso)
+                if not registros:
+                    self.after(0, self._finalizar_sem_leads)
+                    return
+                # Se a exportação falhar, repetir a geração salva esta mesma entrega.
+                self._exportacao_pendente = (registros, tem_bonif, avisos)
+            registros, tem_bonif, avisos = self._exportacao_pendente
+            self.after(0, lambda: self.lbl_status_geracao.configure(text="Gravando arquivo de importação..."))
+            caminho = core.salvar_planilha_importacao(config, registros, tem_bonif)
+            self.after(0, lambda: self._finalizar_importacao(registros, tem_bonif, avisos, caminho))
         except Exception:
             erro = traceback.format_exc()
-            self.lbl_status_geracao.configure(
-                text="Erro ao gerar importação.", text_color="red"
-            )
-            messagebox.showerror(
-                "Erro", f"Ocorreu um erro ao gerar a importação:\n\n{erro}"
-            )
+            self.after(0, lambda erro=erro: self._falha_importacao(erro))
+
+    def _finalizar_sem_leads(self):
+        self._gerando = False
+        self.btn_gerar.configure(state="normal")
+        self._set_botoes_pos_geracao(bool(self.ultimos_registros))
+        self.lbl_status_geracao.configure(text="Nenhum lead elegível localizado.", text_color="orange")
+        messagebox.showwarning("Aviso", "Nenhum lead elegível localizado para os critérios informados.", parent=self)
+
+    def _finalizar_importacao(self, registros, tem_bonif, avisos, caminho):
+        self._assinaturas_geradas.add(self._assinatura_em_geracao)
+        self.ultimos_registros = registros
+        self.tem_auto_bonif = tem_bonif
+        self._exportacao_pendente = None
+        self._gerando = False
+        self.btn_gerar.configure(state="normal", text="GERAR IMPORTAÇÃO")
+        self.lbl_status_geracao.configure(text=f"{len(registros)} leads importados.", text_color=VERDE)
+        self.lbl_resumo_envio.configure(text=f"{len(registros)} leads prontos. Escolha uma ação abaixo.")
+        self._set_botoes_pos_geracao(True)
+        self.progress_bar.set(0)
+        mensagem = f"{len(registros)} leads importados. Arquivo salvo em:\n{caminho}"
+        if avisos:
+            mensagem += "\n\nAvisos:\n" + "\n".join(avisos)
+        messagebox.showinfo("Importação Concluída", mensagem, parent=self)
+
+    def _falha_importacao(self, erro):
+        self._gerando = False
+        self.btn_gerar.configure(state="normal")
+        if self._exportacao_pendente is not None:
+            self.btn_gerar.configure(text="REPETIR SALVAMENTO DA IMPORTAÇÃO")
+            erro = ("Os leads desta entrega foram preservados nesta sessão. "
+                    "Corrija a pasta de saída e clique em REPETIR SALVAMENTO DA IMPORTAÇÃO. "
+                    "Isso não selecionará novos leads. Mantenha o app aberto até concluir.\n\n" + erro)
+        self.lbl_status_geracao.configure(text="Erro ao gerar importação.", text_color="red")
+        self._set_botoes_pos_geracao(bool(self.ultimos_registros))
+        messagebox.showerror("Erro", erro, parent=self)
 
     def _set_botoes_pos_geracao(self, habilitado: bool):
         estado = "normal" if habilitado else "disabled"
         self.btn_enviar_goalfy.configure(state=estado)
         self.btn_enviar_email.configure(state=estado)
         self.btn_imprimir.configure(state=estado)
+        self.btn_enviar_gestores.configure(state=estado)
 
     # ------------------------------------------------------------------
     # Envio para o Goalfy
     # ------------------------------------------------------------------
     def _enviar_goalfy_thread(self):
-        if not self.ultimos_registros:
+        if not self.ultimos_registros or self._goalfy_em_execucao or self._gerando:
             return
+        try:
+            if not envio_goalfy.indices_pendentes(self.ultimos_registros):
+                messagebox.showwarning("Envio repetido bloqueado", "Esta importação já foi enviada ao Goalfy. Não é possível enviar a mesma planilha duas vezes.", parent=self)
+                return
+        except Exception as exc:
+            messagebox.showerror("Histórico de envios", str(exc), parent=self)
+            return
+        self._goalfy_em_execucao = True
         threading.Thread(target=self._enviar_goalfy, daemon=True).start()
 
     def _enviar_goalfy(self):
+        self.after(0, lambda: self.btn_reenviar_goalfy.configure(state="disabled"))
         self._set_botoes_pos_geracao(habilitado=False)
 
         def progresso(i, total, ok):
@@ -359,7 +521,7 @@ class AppImportador(ctk.CTk):
             )
 
         try:
-            sucessos, falhas, erros = core.enviar_para_goalfy(
+            sucessos, falhas, erros = envio_goalfy.enviar_protegido(
                 self.config_data, self.ultimos_registros, progress_callback=progresso
             )
             self.lbl_resumo_envio.configure(
@@ -375,7 +537,86 @@ class AppImportador(ctk.CTk):
                 "Erro", f"Ocorreu um erro ao enviar para o Goalfy:\n\n{erro}"
             )
         finally:
-            self._set_botoes_pos_geracao(habilitado=True)
+            self.after(0, self._finalizar_reenvio_goalfy)
+
+    def _abrir_planilha_goalfy(self):
+        if self._goalfy_em_execucao or self._gerando:
+            return
+        caminho = filedialog.askopenfilename(parent=self, title="Selecione uma importação salva",
+                                             filetypes=[("Planilhas de importação", "*.xlsx")])
+        if not caminho:
+            return
+        try:
+            registros = core.ler_planilha_importacao(caminho)
+            pendentes = list(range(len(registros)))
+        except Exception as exc:
+            messagebox.showerror("Planilha de importação", str(exc), parent=self)
+            return
+        popup = ctk.CTkToplevel(self)
+        popup.title("Enviar importação salva ao Goalfy")
+        popup.geometry("900x570")
+        popup.transient(self)
+        popup.grab_set()
+        ctk.CTkLabel(popup, text="Enviar planilha salva ao Goalfy", font=ctk.CTkFont(size=20, weight="bold")).pack(anchor="w", padx=20, pady=(15, 5))
+        ctk.CTkLabel(popup, text=f"{os.path.basename(caminho)} • {len(registros)} leads", wraplength=850).pack(anchor="w", padx=20)
+        ctk.CTkLabel(popup, text="Selecione os leads que deseja reenviar ao Goalfy.", wraplength=850).pack(anchor="w", padx=20, pady=5)
+        frame = ctk.CTkFrame(popup)
+        frame.pack(fill="both", expand=True, padx=20, pady=5)
+        colunas = ("linha", "nome", "vendedor", "produto", "empresa")
+        tree = ttk.Treeview(frame, columns=colunas, show="headings", selectmode="extended")
+        for c, w in zip(colunas, (55, 250, 180, 130, 100)):
+            tree.heading(c, text=c.upper())
+            tree.column(c, width=w)
+        barra = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=barra.set)
+        barra.pack(side="right", fill="y")
+        tree.pack(fill="both", expand=True)
+        for i in pendentes:
+            r = registros[i]
+            tree.insert("", "end", iid=str(i), values=(r["_linha_origem"], r["nome"], r["responsavel"], r["produto"], r["empresa"]))
+        tree.selection_set(tree.get_children())
+        botoes = ctk.CTkFrame(popup, fg_color="transparent")
+        botoes.pack(fill="x", padx=20, pady=10)
+        ctk.CTkButton(botoes, text="Selecionar Todos", command=lambda: tree.selection_set(tree.get_children())).pack(side="left", padx=5)
+        ctk.CTkButton(botoes, text="Limpar Seleção", command=lambda: tree.selection_remove(*tree.selection()), fg_color="#555555").pack(side="left", padx=5)
+        def confirmar():
+            import copy
+            indices = [int(i) for i in tree.selection()]
+            selecionados = [registros[i] for i in indices]
+            if not selecionados:
+                messagebox.showwarning("Seleção", "Selecione pelo menos um lead.", parent=popup)
+                return
+            popup.destroy()
+            self._goalfy_em_execucao = True
+            self.btn_reenviar_goalfy.configure(state="disabled")
+            self._set_botoes_pos_geracao(False)
+            threading.Thread(target=self._executar_reenvio_goalfy,
+                             args=(copy.deepcopy(self.config_data), registros, indices), daemon=True).start()
+        rodape = ctk.CTkFrame(popup, fg_color="transparent")
+        rodape.pack(fill="x", padx=20, pady=(0, 15))
+        ctk.CTkButton(rodape, text="CONFIRMAR ENVIO", command=confirmar, fg_color=VERDE).pack(side="left", fill="x", expand=True, padx=5)
+        ctk.CTkButton(rodape, text="CANCELAR", command=popup.destroy, fg_color=VERMELHO).pack(side="right", padx=5)
+
+    def _executar_reenvio_goalfy(self, config, registros, indices=None):
+        def progresso(i, total, ok):
+            self.after(0, lambda i=i, total=total: self.progress_bar.set(i / total))
+            self.after(0, lambda i=i, total=total: self.lbl_resumo_envio.configure(text=f"Planilha salva: enviando {i} de {total}..."))
+        try:
+            selecionados = registros if indices is None else [registros[i] for i in indices]
+            sucesso, falha, erros = core.enviar_para_goalfy(config, selecionados, progress_callback=progresso)
+            mensagem = f"Enviados: {sucesso}\nFalhas: {falha}"
+            if erros:
+                mensagem += "\n\n" + "\n".join(erros)
+            self.after(0, lambda mensagem=mensagem: messagebox.showinfo("Envio da planilha salva", mensagem, parent=self))
+        except Exception as exc:
+            self.after(0, lambda mensagem=str(exc): messagebox.showerror("Goalfy", mensagem, parent=self))
+        finally:
+            self.after(0, self._finalizar_reenvio_goalfy)
+
+    def _finalizar_reenvio_goalfy(self):
+        self._goalfy_em_execucao = False
+        self.btn_reenviar_goalfy.configure(state="normal")
+        self._set_botoes_pos_geracao(bool(self.ultimos_registros))
 
     # ------------------------------------------------------------------
     # Cascata de seleção de vendedores (usada por e-mail e impressão)
@@ -529,10 +770,12 @@ class AppImportador(ctk.CTk):
         tab_geral = sub_tabs.add("Geral")
         tab_matrizes = sub_tabs.add("Matrizes")
         tab_vendedores = sub_tabs.add("Vendedores")
+        tab_gestores = sub_tabs.add("Gestores")
 
         self._montar_subtab_geral(tab_geral)
         self._montar_subtab_matrizes(tab_matrizes)
         self._montar_subtab_vendedores(tab_vendedores)
+        self._montar_subtab_gestores(tab_gestores)
 
     # --- Geral ---
     def _montar_subtab_geral(self, frame):
@@ -545,6 +788,13 @@ class AppImportador(ctk.CTk):
         self.entry_pasta_destino = ctk.CTkEntry(geral)
         self.entry_pasta_destino.insert(0, self.config_data.get("pasta_destino", ""))
         self.entry_pasta_destino.pack(fill="x", padx=10, pady=(0, 10))
+        def escolher_pasta():
+            pasta = filedialog.askdirectory(parent=self, title="Selecione a pasta de importação")
+            if pasta:
+                self.entry_pasta_destino.delete(0, "end")
+                self.entry_pasta_destino.insert(0, pasta)
+        ctk.CTkButton(geral, text="Selecionar pasta de importação", command=escolher_pasta).pack(padx=10, pady=(0, 10))
+
 
         ctk.CTkLabel(geral, text="URL do Webhook Goalfy:").pack(
             anchor="w", padx=10, pady=(0, 0)
@@ -568,10 +818,18 @@ class AppImportador(ctk.CTk):
         ).pack(padx=10, pady=(10, 10), anchor="w")
 
     def _salvar_config_geral(self):
-        self.config_data["pasta_destino"] = self.entry_pasta_destino.get().strip()
-        self.config_data["webhook_url"] = self.entry_webhook.get().strip()
-        core.save_config(self.config_data)
-        messagebox.showinfo("Configurações", "Configurações gerais salvas com sucesso!")
+        import copy
+        nova = copy.deepcopy(self.config_data)
+        nova["pasta_destino"] = self.entry_pasta_destino.get().strip()
+        nova["webhook_url"] = self.entry_webhook.get().strip()
+        try:
+            core.validar_pasta_destino(nova)
+            core.save_config(nova)
+        except Exception as exc:
+            messagebox.showerror("Configurações", str(exc), parent=self)
+            return
+        self.config_data = nova
+        messagebox.showinfo("Configurações", "Configurações gerais salvas com sucesso!", parent=self)
 
     # --- Matrizes ---
     def _montar_subtab_matrizes(self, frame):
@@ -754,6 +1012,174 @@ class AppImportador(ctk.CTk):
         ctk.CTkButton(
             popup, text="SALVAR", fg_color=AZUL, height=38, command=salvar
         ).pack(pady=10, padx=15, fill="x")
+
+    # --- Gestores e subgestores ---
+    def _montar_subtab_gestores(self, frame):
+        ctk.CTkLabel(frame, text="Gestores e subgestores cadastrados",
+                     font=ctk.CTkFont(size=16, weight="bold")).pack(pady=(15, 5), anchor="w", padx=10)
+        ctk.CTkLabel(frame, text="Cadastre cada pessoa uma vez e associe seus produtos em Editar Selecionado.",
+                     wraplength=850).pack(anchor="w", padx=10)
+        tabela = ctk.CTkFrame(frame)
+        tabela.pack(padx=10, pady=5, fill="both", expand=True)
+        colunas = ("PESSOA", "EMAIL", "PRODUTOS")
+        self.tree_gestores = ttk.Treeview(tabela, columns=colunas, show="headings", selectmode="browse")
+        for c, largura in zip(colunas, (220, 250, 400)):
+            self.tree_gestores.heading(c, text="E-MAIL" if c == "EMAIL" else c)
+            self.tree_gestores.column(c, width=largura, minwidth=50, anchor="w")
+        barra = ttk.Scrollbar(tabela, orient="vertical", command=self.tree_gestores.yview)
+        self.tree_gestores.configure(yscrollcommand=barra.set)
+        barra.pack(side="right", fill="y")
+        self.tree_gestores.pack(fill="both", expand=True, padx=5, pady=5)
+        self._recarregar_tabela_gestores()
+        botoes = ctk.CTkFrame(frame, fg_color="transparent")
+        botoes.pack(padx=10, pady=(5, 15), fill="x")
+        ctk.CTkButton(botoes, text="Adicionar Gestor", fg_color=AZUL_ESCURO,
+                     command=self._abrir_dialog_gestor).pack(side="left", padx=5)
+        ctk.CTkButton(botoes, text="Editar Selecionado", fg_color=AZUL,
+                     command=self._editar_gestor_selecionado).pack(side="left", padx=5)
+        ctk.CTkButton(botoes, text="Remover Selecionado", fg_color=VERMELHO,
+                     command=self._remover_gestor_selecionado).pack(side="left", padx=5)
+
+    def _recarregar_tabela_gestores(self):
+        self.tree_gestores.delete(*self.tree_gestores.get_children())
+        for i, r in enumerate(self.config_data.get("gestores", [])):
+            self.tree_gestores.insert("", "end", iid=str(i), values=(r.get("PESSOA", ""), r.get("EMAIL", ""), ", ".join(v["PRODUTO"] for v in r.get("PRODUTOS", []))))
+
+    def _gestor_selecionado(self):
+        selecionados = self.tree_gestores.selection()
+        if not selecionados:
+            messagebox.showinfo("Aviso", "Selecione um gestor ou subgestor na lista.", parent=self)
+            return None
+        return int(selecionados[0])
+
+    def _editar_gestor_selecionado(self):
+        indice = self._gestor_selecionado()
+        if indice is not None:
+            self._abrir_dialog_gestor(indice)
+
+    def _remover_gestor_selecionado(self):
+        indice = self._gestor_selecionado()
+        if indice is None:
+            return
+        r = self.config_data["gestores"][indice]
+        if messagebox.askyesno("Confirmar", f"Remover {r['PESSOA']} e todos os seus vínculos com produtos?", parent=self):
+            import copy
+            nova_config = copy.deepcopy(self.config_data)
+            gestores.excluir_cadastro_gestor(nova_config, indice)
+            try:
+                core.save_config(nova_config)
+            except Exception as exc:
+                messagebox.showerror("Gestores", f"Não foi possível salvar: {exc}", parent=self)
+                return
+            self.config_data = nova_config
+            self._recarregar_tabela_gestores()
+
+    def _abrir_dialog_gestor(self, indice=None):
+        import copy
+        registro = self.config_data.get("gestores", [])[indice] if indice is not None else {}
+        vinculos = copy.deepcopy(registro.get("PRODUTOS", []))
+        popup = ctk.CTkToplevel(self)
+        popup.title("Editar Gestor/Subgestor" if indice is not None else "Novo Gestor/Subgestor")
+        popup.geometry("850x650")
+        popup.transient(self)
+        popup.grab_set()
+        entradas = {}
+        for coluna, nome in (("PESSOA", "Nome"), ("EMAIL", "E-mail")):
+            ctk.CTkLabel(popup, text=nome).pack(anchor="w", padx=15, pady=(8, 0))
+            campo = ctk.CTkEntry(popup)
+            campo.insert(0, registro.get(coluna, ""))
+            campo.pack(fill="x", padx=15)
+            entradas[coluna] = campo
+        ctk.CTkLabel(popup, text="Produtos atribuídos — selecione uma linha para editar suas opções.").pack(anchor="w", padx=15, pady=(10, 0))
+        tree = ttk.Treeview(popup, columns=("PRODUTO", "TIPO", "PADRÃO", "ATIVO"), show="headings", height=8, selectmode="browse")
+        for c in tree["columns"]:
+            tree.heading(c, text=c)
+            tree.column(c, width=180)
+        tree.pack(fill="both", expand=True, padx=15, pady=5)
+        produtos = list(dict.fromkeys(
+            [m.get("exibicao", "") for m in self.config_data.get("matrizes", []) if m.get("exibicao")]
+            + [str(r.get("produto", "")).strip() for r in self.ultimos_registros if r.get("produto")]
+            + [v["PRODUTO"] for pessoa in self.config_data.get("gestores", []) for v in pessoa.get("PRODUTOS", [])]
+        ))
+        campos = {}
+        controles = ctk.CTkFrame(popup)
+        controles.pack(fill="x", padx=15, pady=5)
+        opcoes = {"PRODUTO": produtos, "TIPO": ["GESTOR", "SUBGESTOR"], "PADRÃO": ["SIM", "NÃO"], "ATIVO": ["SIM", "NÃO"]}
+        for i, c in enumerate(opcoes):
+            controles.grid_columnconfigure(i, weight=1)
+            ctk.CTkLabel(controles, text=c).grid(row=0, column=i, padx=5)
+            campo = ctk.CTkComboBox(controles, values=opcoes[c], width=175,
+                                   state="normal" if c == "PRODUTO" else "readonly")
+            campo.set({"PRODUTO": "", "TIPO": "GESTOR", "PADRÃO": "NÃO", "ATIVO": "SIM"}[c])
+            campo.grid(row=1, column=i, padx=5, pady=5, sticky="ew")
+            campos[c] = campo
+        editando = [None]
+        def recarregar():
+            tree.delete(*tree.get_children())
+            for i, r in enumerate(vinculos):
+                tree.insert("", "end", iid=str(i), values=[r[c] for c in tree["columns"]])
+        def selecionar(event):
+            if tree.selection():
+                editando[0] = int(tree.selection()[0])
+                for c, campo in campos.items():
+                    campo.set(vinculos[editando[0]][c])
+        tree.bind("<<TreeviewSelect>>", selecionar)
+        def novo_produto():
+            editando[0] = None
+            tree.selection_remove(*tree.selection())
+            campos["PRODUTO"].set("")
+        def atribuir():
+            r = {c: campo.get().strip() for c, campo in campos.items()}
+            if not r["PRODUTO"]:
+                messagebox.showwarning("Produto", "Selecione ou digite um produto.", parent=popup)
+                return
+            if any(i != editando[0] and gestores._chave(v["PRODUTO"]) == gestores._chave(r["PRODUTO"]) for i, v in enumerate(vinculos)):
+                messagebox.showwarning("Produto", "Produto já atribuído. Selecione sua linha para editar.", parent=popup)
+                return
+            if editando[0] is None:
+                vinculos.append(r)
+            else:
+                vinculos[editando[0]] = r
+            novo_produto()
+            recarregar()
+        def remover_produto():
+            if tree.selection():
+                del vinculos[int(tree.selection()[0])]
+                novo_produto()
+                recarregar()
+        botoes_produto = ctk.CTkFrame(popup, fg_color="transparent")
+        botoes_produto.pack(fill="x", padx=15, pady=5)
+        ctk.CTkButton(botoes_produto, text="Novo produto", command=novo_produto).pack(side="left", padx=5)
+        ctk.CTkButton(botoes_produto, text="Atribuir / Atualizar produto", command=atribuir, width=210).pack(side="left", padx=5)
+        ctk.CTkButton(botoes_produto, text="Remover produto", command=remover_produto, fg_color=VERMELHO).pack(side="left", padx=5)
+        def salvar():
+            # Aplica também o produto preenchido, evitando perder uma edição pendente.
+            if campos["PRODUTO"].get().strip():
+                r = {c: campo.get().strip() for c, campo in campos.items()}
+                if editando[0] is not None:
+                    vinculos[editando[0]] = r
+                elif not any(gestores._chave(v["PRODUTO"]) == gestores._chave(r["PRODUTO"]) for v in vinculos):
+                    vinculos.append(r)
+            nova_config = copy.deepcopy(self.config_data)
+            cadastro = {c: campo.get() for c, campo in entradas.items()}
+            cadastro["PRODUTOS"] = vinculos
+            try:
+                gestores.salvar_cadastro_gestor(nova_config, cadastro, indice)
+                core.save_config(nova_config)
+            except ValueError as exc:
+                messagebox.showwarning("Gestores", str(exc), parent=popup)
+                return
+            except Exception as exc:
+                messagebox.showerror("Gestores", f"Não foi possível salvar: {exc}", parent=popup)
+                return
+            self.config_data = nova_config
+            self._recarregar_tabela_gestores()
+            popup.destroy()
+        botoes = ctk.CTkFrame(popup, fg_color="transparent")
+        botoes.pack(fill="x", padx=15, pady=10)
+        ctk.CTkButton(botoes, text="SALVAR", command=salvar).pack(side="left", padx=5)
+        ctk.CTkButton(botoes, text="CANCELAR", command=popup.destroy).pack(side="right", padx=5)
+        recarregar()
 
     # --- Vendedores ---
     def _montar_subtab_vendedores(self, frame):
