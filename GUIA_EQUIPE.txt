@@ -1,0 +1,22 @@
+IMPORTADOR GOALFY - VERSÃO PORTÁTIL PARA WINDOWS 64 BITS
+
+1. Extraia TODO o arquivo ZIP para uma pasta no seu computador.
+2. Abra ImportadorGoalfy.exe. Não é necessário instalar Python.
+3. Mantenha a pasta _internal ao lado do executável.
+4. Em Configurações > Matrizes, edite o caminho de cada matriz usada neste PC.
+5. Em Configurações > Geral, escolha a pasta para salvar as importações.
+6. Confira os cadastros de vendedores e gestores antes da primeira entrega.
+
+Os cadastros da equipe acompanham o aplicativo. Os caminhos das planilhas e
+da pasta de saída foram deixados em branco para configurar em cada computador.
+Nenhuma planilha de clientes nem histórico de envios acompanha este pacote.
+
+Para e-mails, é necessário Microsoft Outlook Desktop com perfil configurado.
+Para impressão, configure a impressora e o aplicativo associado aos arquivos XLSX.
+
+As configurações são salvas em config.json, na pasta do aplicativo. O histórico
+de envios confirmados ao Goalfy fica em historico_envios_goalfy.json nessa pasta.
+Use uma cópia local com permissão de gravação em cada computador.
+
+ATUALIZAÇÕES: preserve o config.json e o historico_envios_goalfy.json do usuário.
+Atualize o executável e a pasta _internal sem substituir esses arquivos locais.

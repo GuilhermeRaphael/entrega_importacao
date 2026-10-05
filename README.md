@@ -1,12 +1,26 @@
 # Importador Goalfy (Python)
 
-## Como gerar o .exe
+## App portátil para a equipe (Windows 64 bits)
 
-```bash
-pip install pyinstaller
-pyinstaller --noconfirm --onefile --windowed --icon=imp.ico --name "ImportadorGoalfy" app.py
+Distribua o ZIP ImportadorGoalfy-Windows.zip. Cada pessoa deve extrair a pasta
+completa e abrir ImportadorGoalfy.exe. Não é necessário instalar Python.
+A pasta _internal precisa permanecer ao lado do executável.
+
+O config.json fica ao lado do executável e mantém as configurações entre
+execuções. O pacote conserva cadastros de matrizes, vendedores e gestores,
+mas remove os caminhos pessoais: cada usuário configura seus arquivos em
+Configurações > Matrizes e a pasta de saída em Geral. Não inclui leads nem
+histórico de envios. Veja GUIA_EQUIPE.txt para uso e atualização.
+
+Para gerar novamente em Windows, com Python e as dependências instaladas:
+
+```powershell
+python -m pip install -r requirements.txt -r requirements-build.txt
+.\build_windows.ps1
 ```
 
+O script gera dist/ImportadorGoalfy e dist/ImportadorGoalfy-Windows.zip.
+Outlook Desktop configurado continua necessário para envio de e-mails.
 
 ## Pasta de saída e geração
 
@@ -61,7 +75,7 @@ TRAVAR IMPORTAÇÃO REPETIDA vem ativado e bloqueia a segunda geração da mesma
 fila nesta sessão. NOVA REMESSA limpa a fila para iniciar outra entrega.
 O salvamento pendente continua podendo ser repetido sem selecionar novos leads.
 
-ENVIAR PLANILHA SALVA AO GOALFY permite escolher um .xlsx com a aba IMPORTAÇÃO,
+SELECIONAR PLANILHA SALVA NA MÁQUINA permite escolher um .xlsx com a aba IMPORTAÇÃO,
 revisar e selecionar os leads e confirmar o envio. Não altera matrizes nem
 a remessa atual. Escolha somente os leads que precisam de reenvio para evitar
 duplicar os que o Goalfy já aceitou. Erros aparecem no resumo final.
@@ -79,7 +93,7 @@ consulta historico_envios_goalfy.json. Envios confirmados ficam bloqueados
 inclusive após reiniciar o app; linhas que falharam podem ser tentadas novamente.
 O histórico começa a registrar a partir da versão que introduziu essa proteção.
 
-ENVIAR PLANILHA SALVA AO GOALFY permite reenviar o mesmo arquivo quantas vezes
+SELECIONAR PLANILHA SALVA NA MÁQUINA permite reenviar o mesmo arquivo quantas vezes
 forem necessárias. Essa opção exibe todos os leads, permite selecionar quais
 reenviar e não consulta nem modifica o histórico da trava do botão principal.
 
@@ -100,3 +114,10 @@ após terminar; alterações externas durante a distribuição são detectadas.
 
 Testes completos:
 python -B -m unittest test_gestores test_novas_funcionalidades test_protecao_otimizacao -v
+
+## Correções da versão portátil
+
+O caminho físico das matrizes conserva a grafia original do nome. A conversão
+para minúsculas é usada somente em comparações, nunca para substituir o arquivo.
+O botão de reenvio é roxo e se chama SELECIONAR PLANILHA SALVA NA MÁQUINA.
+Testes da distribuição: python -B -m unittest test_distribuicao_windows -v

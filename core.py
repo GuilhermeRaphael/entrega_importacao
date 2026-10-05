@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -19,7 +20,14 @@ import openpyxl
 import pandas as pd
 import requests
 
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+def diretorio_aplicacao():
+    """Configuração persistente ao lado do executável na versão portátil."""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+CONFIG_PATH = os.path.join(diretorio_aplicacao(), "config.json")
 
 # Colunas da MATRIZ (1-indexed, como no VBA)
 COL_MATRIZ_N = 1
@@ -244,7 +252,7 @@ def consolidar_remessa(
 
     from collections import Counter, deque
     caminhos = [obter_caminho_matriz(config, item.produto) for item in fila]
-    caminhos = [os.path.normcase(os.path.abspath(caminho)) if caminho else "" for caminho in caminhos]
+    caminhos = [os.path.realpath(os.path.abspath(caminho)) if caminho else "" for caminho in caminhos]
     restantes = Counter(caminhos)
     abertos, candidatos = {}, {}
 

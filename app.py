@@ -35,6 +35,9 @@ class AppImportador(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Importador Goalfy")
+        caminho_icone = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "app.ico")
+        if os.path.isfile(caminho_icone):
+            self.iconbitmap(caminho_icone)
         self.geometry("1040x720")
         self.minsize(960, 650)
 
@@ -217,7 +220,7 @@ class AppImportador(ctk.CTk):
         )
         self.btn_enviar_gestores.grid(row=1, column=0, columnspan=3, padx=5, pady=(8, 0), sticky="ew")
         self.btn_reenviar_goalfy = ctk.CTkButton(
-            botoes_acao, text="ENVIAR PLANILHA SALVA AO GOALFY", fg_color=VERDE,
+            botoes_acao, text="SELECIONAR PLANILHA SALVA NA MÁQUINA", fg_color="#7040A0", hover_color="#59317F",
             command=self._abrir_planilha_goalfy,
         )
         self.btn_reenviar_goalfy.grid(row=2, column=0, columnspan=3, padx=5, pady=(8, 0), sticky="ew")
@@ -1306,5 +1309,23 @@ class AppImportador(ctk.CTk):
 
 
 if __name__ == "__main__":
+    import sys
     app = AppImportador()
-    app.mainloop()
+    if "--self-test" in sys.argv:
+        # Verificação do executável sem envio nem acesso a matrizes.
+        import json
+        from pathlib import Path
+        app.withdraw()
+        app.update_idletasks()
+        import pythoncom
+        import win32com.client
+        dados = {"status": "ok", "config_path": core.CONFIG_PATH,
+                 "config_exists": Path(core.CONFIG_PATH).is_file(),
+                 "button": app.btn_reenviar_goalfy.cget("text"),
+                 "outlook_dependencies": "ok"}
+        indice = sys.argv.index("--self-test")
+        if len(sys.argv) > indice + 1:
+            Path(sys.argv[indice + 1]).write_text(json.dumps(dados, ensure_ascii=False, indent=2), encoding="utf-8")
+        app.destroy()
+    else:
+        app.mainloop()
